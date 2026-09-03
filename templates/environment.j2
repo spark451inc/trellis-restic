@@ -1,0 +1,9 @@
+RESTIC_REPOSITORY={{ ('s3:s3.' ~ restic_backup_s3_region ~ '.amazonaws.com/' ~ restic_backup_s3_bucket ~ '/' ~ restic_backup_stack_name ~ '/' ~ env) | quote }}
+RESTIC_HOST={{ (restic_backup_stack_name ~ '-' ~ env) | quote }}
+RESTIC_CACHE_DIR=/var/cache/restic-backups
+RESTIC_BACKUP_REGION={{ restic_backup_s3_region | quote }}
+RESTIC_BACKUP_STACK_NAME={{ restic_backup_stack_name | quote }}
+RESTIC_BACKUP_ENV={{ env | quote }}
+RESTIC_BACKUP_LIMIT_UPLOAD_KIB={{ restic_backup_limit_upload_kib | int }}
+RESTIC_BACKUP_S3_CONNECTIONS={{ restic_backup_s3_connections | int }}
+RESTIC_BACKUP_KUMA_URL={{ restic_backup_uptime_kuma_push_url | quote }}

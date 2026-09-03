@@ -1,0 +1,13 @@
+[Unit]
+Description=Run restic backups of WordPress uploads
+
+[Timer]
+{% for calendar in restic_backup_on_calendar %}
+OnCalendar={{ calendar }}
+{% endfor %}
+Persistent=true
+RandomizedDelaySec={{ restic_backup_randomized_delay_sec }}
+Unit=restic-backup.service
+
+[Install]
+WantedBy=timers.target

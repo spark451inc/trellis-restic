@@ -1,0 +1,160 @@
+---
+- name: Validate Trellis site names
+  ansible.builtin.assert:
+    that:
+      - item.key is string
+      - item.key | length > 0
+      - item.key is not search('[\r\n\t]')
+    fail_msg: WordPress site names must be nonempty and cannot contain tabs or newlines.
+  loop: "{{ wordpress_sites | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate uploads path overrides
+  ansible.builtin.assert:
+    that:
+      - item.value is string
+      - item.value is match('^/.+')
+      - item.value is not search('[\r\n\t]')
+    fail_msg: Uploads path overrides must be absolute paths without tabs or newlines.
+  loop: "{{ restic_backup_uploads_paths | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate per-site exclusion lists
+  ansible.builtin.assert:
+    that:
+      - item.value is sequence
+      - item.value is not string
+    fail_msg: Each restic_backup_site_excludes value must be a list.
+  loop: "{{ restic_backup_site_excludes | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate exclusion patterns
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | length > 0
+      - not item.startswith('/')
+      - not item.startswith('!')
+      - item is not search('[\r\n]')
+      - item is not search('(^|/)\.\.(/|$)')
+    fail_msg: >-
+      Exclusion patterns must be nonempty, non-negated relative patterns
+      without newlines or parent-directory components.
+  loop: >-
+    {{
+      restic_backup_excludes +
+      (restic_backup_site_excludes.values() | list | flatten)
+    }}
+  loop_control:
+    label: "{{ item }}"
+
+- name: Validate timer calendar expressions
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | length > 0
+    fail_msg: Timer calendar expressions must be nonempty strings.
+  loop: "{{ restic_backup_on_calendar }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Parse timer calendar expressions
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemd-analyze
+      - calendar
+      - "{{ item }}"
+  loop: "{{ restic_backup_on_calendar }}"
+  loop_control:
+    label: "{{ item }}"
+  changed_when: false
+  check_mode: false
+  become: true
+
+- name: Validate timer randomized delay
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemd-analyze
+      - timespan
+      - "{{ restic_backup_randomized_delay_sec }}"
+  changed_when: false
+  check_mode: false
+  become: true
+
+- name: Validate service runtime limit
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemd-analyze
+      - timespan
+      - "{{ restic_backup_runtime_max_sec }}"
+  changed_when: false
+  check_mode: false
+  become: true
+
+- name: Install Uptime Kuma push dependency
+  when: restic_backup_uptime_kuma_push_url | length > 0
+  ansible.builtin.apt:
+    name: curl
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+
+- name: Create restic backup configuration directory
+  ansible.builtin.file:
+    path: /etc/restic-backups
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Create private restic cache directory
+  ansible.builtin.file:
+    path: /var/cache/restic-backups
+    state: directory
+    owner: "{{ web_user }}"
+    group: "{{ web_group }}"
+    mode: "0700"
+  become: true
+
+- name: Write restic runtime environment
+  ansible.builtin.template:
+    src: environment.j2
+    dest: /etc/restic-backups/environment
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  become: true
+
+- name: Write restic source metadata
+  ansible.builtin.template:
+    src: sources.j2
+    dest: /etc/restic-backups/sources
+    owner: root
+    group: "{{ web_group }}"
+    mode: "0640"
+  become: true
+
+- name: Write restic exclusion patterns
+  ansible.builtin.template:
+    src: excludes.j2
+    dest: /etc/restic-backups/excludes
+    owner: root
+    group: "{{ web_group }}"
+    mode: "0640"
+  become: true
+
+- name: Install restic backup wrapper
+  ansible.builtin.template:
+    src: restic-backup.j2
+    dest: /usr/local/sbin/restic-backup
+    owner: root
+    group: root
+    mode: "0755"
+    validate: /usr/bin/bash -n %s
+  become: true

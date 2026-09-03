@@ -1,0 +1,131 @@
+---
+- name: Install restic decompression dependency
+  ansible.builtin.apt:
+    name: bzip2
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+
+- name: Validate restic CPU architecture
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+    fail_msg: >-
+      Unsupported CPU architecture {{ ansible_facts['architecture'] }}.
+      Restic is configured for x86_64 and aarch64.
+
+- name: Select restic release architecture
+  ansible.builtin.set_fact:
+    _restic_backup_arch: >-
+      {{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}
+
+- name: Check installed restic version
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/restic
+      - version
+  register: _restic_backup_installed
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  become: true
+
+- name: Record whether restic installation is required
+  ansible.builtin.set_fact:
+    _restic_backup_needs_install: >-
+      {{
+        _restic_backup_installed.rc != 0 or
+        _restic_backup_installed.stdout is not match(
+          '^restic ' ~ (restic_backup_version | regex_escape) ~ '(\s|$)'
+        )
+      }}
+
+- name: Report pending restic installation in check mode
+  when:
+    - ansible_check_mode
+    - _restic_backup_needs_install
+  ansible.builtin.debug:
+    msg: Restic {{ restic_backup_version }} would be installed.
+  changed_when: true
+
+- name: Install pinned restic binary
+  when:
+    - not ansible_check_mode
+    - _restic_backup_needs_install
+  become: true
+  block:
+    - name: Create restic staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: restic-install-
+      register: _restic_backup_staging
+
+    - name: Download compressed restic release
+      ansible.builtin.get_url:
+        url: >-
+          https://github.com/restic/restic/releases/download/v{{
+          restic_backup_version }}/restic_{{ restic_backup_version }}_linux_{{
+          _restic_backup_arch }}.bz2
+        dest: "{{ _restic_backup_staging.path }}/restic.bz2"
+        mode: "0600"
+        checksum: "{{ restic_backup_checksums[_restic_backup_arch] }}"
+
+    - name: Decompress restic release
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/bzip2
+          - --decompress
+          - --keep
+          - "{{ _restic_backup_staging.path }}/restic.bz2"
+      changed_when: true
+
+    - name: Set staged restic permissions
+      ansible.builtin.file:
+        path: "{{ _restic_backup_staging.path }}/restic"
+        state: file
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Verify staged restic version
+      ansible.builtin.command:
+        argv:
+          - "{{ _restic_backup_staging.path }}/restic"
+          - version
+      register: _restic_backup_staged_version
+      changed_when: false
+      failed_when: >-
+        _restic_backup_staged_version.rc != 0 or
+        _restic_backup_staged_version.stdout is not match(
+          '^restic ' ~ (restic_backup_version | regex_escape) ~ '(\s|$)'
+        )
+
+    - name: Install verified restic binary
+      ansible.builtin.copy:
+        src: "{{ _restic_backup_staging.path }}/restic"
+        dest: /usr/local/bin/restic
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0755"
+  always:
+    - name: Remove restic staging directory
+      ansible.builtin.file:
+        path: "{{ _restic_backup_staging.path | default('/tmp/restic-install-not-created') }}"
+        state: absent
+
+- name: Verify restic installation
+  when: not ansible_check_mode
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/restic
+      - version
+  register: _restic_backup_version_check
+  changed_when: false
+  failed_when: >-
+    _restic_backup_version_check.rc != 0 or
+    _restic_backup_version_check.stdout is not match(
+      '^restic ' ~ (restic_backup_version | regex_escape) ~ '(\s|$)'
+    )
+  become: true

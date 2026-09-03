@@ -1,0 +1,9 @@
+{% for site, config in wordpress_sites | dictsort if site not in restic_backup_excluded_sites %}
+{% set source = restic_backup_uploads_paths.get(site, www_root ~ '/' ~ site ~ '/shared/uploads') %}
+{% for pattern in restic_backup_excludes %}
+{{ (source ~ '/' ~ pattern) | replace('$', '$$') }}
+{% endfor %}
+{% for pattern in restic_backup_site_excludes.get(site, []) %}
+{{ (source ~ '/' ~ pattern) | replace('$', '$$') }}
+{% endfor %}
+{% endfor %}

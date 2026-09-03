@@ -1,0 +1,137 @@
+---
+- name: Validate restic backup role enablement
+  ansible.builtin.assert:
+    that:
+      - restic_backup_enabled is boolean
+    fail_msg: restic_backup_enabled must be true or false.
+  tags: [restic, backups]
+
+- name: Configure restic backups
+  when: restic_backup_enabled
+  tags: [restic, backups]
+  block:
+    - name: Validate required Trellis variables
+      ansible.builtin.assert:
+        that:
+          - env is defined
+          - env is string
+          - env | length > 0
+          - env is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - web_user is defined
+          - web_user is string
+          - web_user is match('^[A-Za-z_][A-Za-z0-9_-]*[$]?$')
+          - web_group is defined
+          - web_group is string
+          - web_group is match('^[A-Za-z_][A-Za-z0-9_-]*[$]?$')
+          - www_root is defined
+          - www_root is string
+          - www_root is match('^/.+')
+          - www_root is not search('[\r\n\t]')
+          - wordpress_sites is defined
+          - wordpress_sites is mapping
+          - wordpress_sites | length > 0
+        fail_msg: >-
+          This role requires valid Trellis env, web_user, web_group, www_root,
+          and wordpress_sites values.
+
+    - name: Validate required restic backup settings
+      ansible.builtin.assert:
+        that:
+          - restic_backup_s3_bucket is string
+          - restic_backup_s3_bucket is match('^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$')
+          - "'..' not in restic_backup_s3_bucket"
+          - restic_backup_s3_region is string
+          - restic_backup_s3_region is match('^[A-Za-z0-9][A-Za-z0-9-]*$')
+          - restic_backup_stack_name is string
+          - restic_backup_stack_name is match('^[A-Za-z0-9][A-Za-z0-9._-]*$')
+          - restic_backup_insecure_no_password is boolean
+          - restic_backup_insecure_no_password
+        fail_msg: >-
+          Set a bucket name, AWS region, stack name, and explicitly set
+          restic_backup_insecure_no_password: true.
+
+    - name: Validate restic backup collections
+      ansible.builtin.assert:
+        that:
+          - restic_backup_excluded_sites is sequence
+          - restic_backup_excluded_sites is not string
+          - restic_backup_uploads_paths is mapping
+          - restic_backup_excludes is sequence
+          - restic_backup_excludes is not string
+          - restic_backup_site_excludes is mapping
+          - restic_backup_on_calendar is sequence
+          - restic_backup_on_calendar is not string
+          - restic_backup_on_calendar | length > 0
+        fail_msg: >-
+          Site selectors, path overrides, exclusions, and schedules must use
+          the documented list or mapping types.
+
+    - name: Validate site setting keys
+      ansible.builtin.assert:
+        that:
+          - restic_backup_excluded_sites | difference(wordpress_sites.keys() | list) | length == 0
+          - restic_backup_uploads_paths.keys() | difference(wordpress_sites.keys() | list) | length == 0
+          - restic_backup_site_excludes.keys() | difference(wordpress_sites.keys() | list) | length == 0
+          - wordpress_sites.keys() | difference(restic_backup_excluded_sites) | length > 0
+        fail_msg: >-
+          Site configuration keys must exist in wordpress_sites, and at least
+          one site must remain enabled.
+
+    - name: Validate restic runtime controls
+      ansible.builtin.assert:
+        that:
+          - restic_backup_limit_upload_kib | string is match('^[0-9]+$')
+          - restic_backup_limit_upload_kib | int >= 0
+          - restic_backup_s3_connections | string is match('^[0-9]+$')
+          - restic_backup_s3_connections | int >= 0
+          - restic_backup_nice | string is match('^-?[0-9]+$')
+          - restic_backup_nice | int >= -20
+          - restic_backup_nice | int <= 19
+          - restic_backup_io_scheduling_priority | string is match('^[0-9]+$')
+          - restic_backup_io_scheduling_priority | int >= 0
+          - restic_backup_io_scheduling_priority | int <= 7
+          - restic_backup_uptime_kuma_push_url is string
+          - restic_backup_uptime_kuma_push_url | length == 0 or restic_backup_uptime_kuma_push_url is match('^https?://')
+          - restic_backup_uptime_kuma_push_url is not search('[\r\n]')
+          - restic_backup_initialize | string | lower in ['true', 'false']
+          - restic_backup_io_scheduling_class in ['none', 'realtime', 'best-effort', 'idle']
+          - restic_backup_runtime_max_sec | string | length > 0
+          - restic_backup_randomized_delay_sec | string | length > 0
+          - restic_backup_memory_max is string
+          - restic_backup_memory_max is match('^(|infinity|[0-9]+([KMGTPE]|%)?)$')
+        fail_msg: One or more restic backup runtime controls are invalid.
+
+    - name: Install restic
+      ansible.builtin.import_tasks: install.yml
+      tags: [restic, backups, restic-install]
+
+    - name: Configure restic backups
+      ansible.builtin.import_tasks: configure.yml
+      tags: [restic, backups, restic-configure]
+
+    - name: Initialize restic repository
+      ansible.builtin.import_tasks: initialize.yml
+      tags: [restic, backups, restic-initialize]
+
+    - name: Schedule restic backups
+      ansible.builtin.import_tasks: schedule.yml
+      tags: [restic, backups, restic-schedule]
+
+- name: Check for a previously installed restic backup timer
+  when: not restic_backup_enabled
+  ansible.builtin.stat:
+    path: /etc/systemd/system/restic-backup.timer
+  register: _restic_backup_disabled_timer
+  become: true
+  tags: [restic, backups, restic-schedule]
+
+- name: Disable restic backup timer
+  when:
+    - not restic_backup_enabled
+    - _restic_backup_disabled_timer.stat.exists
+  ansible.builtin.systemd:
+    name: restic-backup.timer
+    enabled: false
+    state: stopped
+  become: true
+  tags: [restic, backups, restic-schedule]
