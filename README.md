@@ -420,9 +420,7 @@ Complete this checklist against staging before production:
 - [ ] Dry-run the documented retention policy using the maintenance identity.
 - [ ] Complete and verify a staged restore to a temporary target.
 
-## Releases and license
+## Releases
 
 Publish immutable semantic tags such as `v1.0.0` and pin Trellis `galaxy.yml`
 to a tested tag.
-
-This role is licensed under [GPL-2.0-or-later](LICENSE).

@@ -6,7 +6,7 @@ galaxy_info:
     Install and schedule passwordless restic backups of uploads for
     Trellis-managed WordPress servers
   company: Spark451
-  license: GPL-2.0-or-later
+  license: proprietary
   min_ansible_version: "2.10"
   platforms:
     - name: Ubuntu
