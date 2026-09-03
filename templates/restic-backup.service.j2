@@ -9,16 +9,11 @@ User={{ web_user }}
 Group={{ web_group }}
 EnvironmentFile=/etc/restic-backups/environment
 ExecStart=/usr/local/sbin/restic-backup
-TimeoutStartSec={{ restic_backup_runtime_max_sec }}
-Nice={{ restic_backup_nice }}
-IOSchedulingClass={{ restic_backup_io_scheduling_class }}
-IOSchedulingPriority={{ restic_backup_io_scheduling_priority }}
-UMask=0077
+TimeoutStartSec=5h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectSystem=strict
-ProtectHome=read-only
-ReadWritePaths=/var/cache/restic-backups
-{% if restic_backup_memory_max | length > 0 %}
-MemoryMax={{ restic_backup_memory_max }}
-{% endif %}
+ReadWritePaths={{ restic_backup_cache_dir }}

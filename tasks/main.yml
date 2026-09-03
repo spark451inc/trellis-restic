@@ -1,98 +1,33 @@
 ---
-- name: Configure restic backups
-  when: restic_backup_enabled | bool
+- name: Validate restic backup settings
+  ansible.builtin.assert:
+    that:
+      - restic_backup_s3_bucket | length > 0
+      - restic_backup_s3_region | length > 0
+      - restic_backup_stack_name | length > 0
+      - restic_backup_excluded_sites is not string
+      - restic_backup_excludes is not string
+      - restic_backup_excluded_sites | difference(wordpress_sites.keys()) | length == 0
+      - wordpress_sites.keys() | difference(restic_backup_excluded_sites) | length > 0
+    fail_msg: >-
+      Set restic_backup_s3_bucket, restic_backup_s3_region, and
+      restic_backup_stack_name; restic_backup_excluded_sites and
+      restic_backup_excludes must be lists, excluded sites must exist in
+      wordpress_sites, and at least one site must remain selected.
   tags: [restic, backups]
-  block:
-    - name: Validate required restic backup settings
-      ansible.builtin.assert:
-        that:
-          - restic_backup_s3_bucket | length > 0
-          - restic_backup_s3_region | length > 0
-          - restic_backup_stack_name | length > 0
-          - restic_backup_insecure_no_password | bool
-        fail_msg: >-
-          Set restic_backup_s3_bucket, restic_backup_s3_region, and
-          restic_backup_stack_name, and explicitly set
-          restic_backup_insecure_no_password: true after reading the README
-          security model.
 
-    - name: Validate site and schedule settings
-      ansible.builtin.assert:
-        that:
-          - restic_backup_excluded_sites is not string
-          - restic_backup_excludes is not string
-          - restic_backup_site_excludes.values() | select('string') | list | length == 0
-          - restic_backup_on_calendar is not string
-          - restic_backup_excluded_sites | difference(wordpress_sites.keys()) | length == 0
-          - restic_backup_uploads_paths.keys() | difference(wordpress_sites.keys()) | length == 0
-          - restic_backup_site_excludes.keys() | difference(wordpress_sites.keys()) | length == 0
-          - wordpress_sites.keys() | difference(restic_backup_excluded_sites) | length > 0
-        fail_msg: >-
-          Site selectors, exclusions, and schedules must be YAML lists, site
-          keys must exist in wordpress_sites, and at least one site must remain
-          enabled.
+- name: Install restic
+  ansible.builtin.import_tasks: install.yml
+  tags: [restic, backups, restic-install]
 
-    # systemd ignores unparseable unit values with a warning, so these are
-    # checked here instead of failing silently on the server.
-    - name: Validate systemd resource settings
-      ansible.builtin.assert:
-        that:
-          - restic_backup_nice | string is match('^-?[0-9]+$')
-          - restic_backup_nice | int >= -20 and restic_backup_nice | int <= 19
-          - restic_backup_io_scheduling_class in ['none', 'realtime', 'best-effort', 'idle']
-          - restic_backup_io_scheduling_priority | string is match('^[0-7]$')
-          - restic_backup_memory_max | string is match('^(|infinity|[0-9]+([KMGTPE]|%)?)$')
-          - restic_backup_limit_upload_kib | string is match('^[0-9]+$')
-          - restic_backup_s3_connections | string is match('^[0-9]+$')
-        fail_msg: One or more restic_backup_* runtime controls are invalid.
+- name: Configure restic backups
+  ansible.builtin.import_tasks: configure.yml
+  tags: [restic, backups, restic-configure]
 
-    - name: Validate timer schedule and timespans
-      ansible.builtin.command:
-        argv:
-          - /usr/bin/systemd-analyze
-          - "{{ item.0 }}"
-          - "{{ item.1 }}"
-      loop: >-
-        {{ (['calendar'] | product(restic_backup_on_calendar) | list)
-           + [['timespan', restic_backup_randomized_delay_sec],
-              ['timespan', restic_backup_runtime_max_sec]] }}
-      loop_control:
-        label: "{{ item | join(' ') }}"
-      changed_when: false
-      check_mode: false
-      become: true
+- name: Initialize restic repository
+  ansible.builtin.import_tasks: initialize.yml
+  tags: [restic, backups, restic-initialize]
 
-    - name: Install restic
-      ansible.builtin.import_tasks: install.yml
-      tags: [restic-install]
-
-    - name: Configure restic backups
-      ansible.builtin.import_tasks: configure.yml
-      tags: [restic-configure]
-
-    - name: Initialize restic repository
-      ansible.builtin.import_tasks: initialize.yml
-      tags: [restic-initialize]
-
-    - name: Schedule restic backups
-      ansible.builtin.import_tasks: schedule.yml
-      tags: [restic-schedule]
-
-- name: Check for a previously installed restic backup timer
-  when: not restic_backup_enabled | bool
-  ansible.builtin.stat:
-    path: /etc/systemd/system/restic-backup.timer
-  register: _restic_backup_disabled_timer
-  become: true
-  tags: [restic, backups, restic-schedule]
-
-- name: Disable restic backup timer
-  when:
-    - not restic_backup_enabled | bool
-    - _restic_backup_disabled_timer.stat.exists
-  ansible.builtin.systemd:
-    name: restic-backup.timer
-    enabled: false
-    state: stopped
-  become: true
+- name: Schedule restic backups
+  ansible.builtin.import_tasks: schedule.yml
   tags: [restic, backups, restic-schedule]

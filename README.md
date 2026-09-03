@@ -1,9 +1,10 @@
 # Trellis Restic Backups
 
 A standalone Ansible role that installs restic and schedules backups of uploads
-for remote [Roots Trellis](https://roots.io/trellis/) WordPress servers. Each
-run creates one snapshot containing every available site's uploads directory
-and stores it in an existing Amazon S3 bucket under `<stack>/<env>`.
+for remote [Roots Trellis](https://roots.io/trellis/) WordPress servers. Every
+six hours it creates one snapshot containing every available site's
+`shared/uploads` directory and stores it in an existing Amazon S3 bucket under
+`<stack>/<env>`.
 
 Database backups are not included. Configure and verify a separate database
 backup system.
@@ -21,12 +22,10 @@ backup system.
 
 ## Security model
 
-This design deliberately uses restic's `--insecure-no-password` mode. Set
-`restic_backup_insecure_no_password: true` only after accepting that **any
-principal that can read the S3 repository objects can read every backup**.
-There is no restic password providing a second boundary, so S3 read
-authorization is the only confidentiality control for uploads that may contain
-private plugin data or protected media.
+The repository is intentionally passwordless (restic `--insecure-no-password`
+on every command). **Any principal that can read the S3 repository objects can
+read every backup.** S3 read authorization is the only confidentiality control
+for uploads that may contain private plugin data or protected media.
 
 The Uptime Kuma push URL can contain a monitor token, so the systemd
 environment file is root-only. systemd still injects it into a process running
@@ -64,38 +63,25 @@ Configure each environment, for example in
 restic_backup_s3_bucket: example-restic-backups
 restic_backup_s3_region: us-east-1
 restic_backup_stack_name: sparksites
-
-# Required acknowledgment; read the security model above.
-restic_backup_insecure_no_password: true
 ```
 
 With these values production uses repository
 `s3:s3.us-east-1.amazonaws.com/example-restic-backups/sparksites/production`
 and restic host `sparksites-production`. Both must remain stable to preserve
 snapshot lineage, and only one host may write a given stack/environment
-repository. Set `restic_backup_enabled: false` to stop and disable the timer on
-a host without removing its configuration.
+repository.
 
-## Initialize once
+To stop backups on a host, remove or condition the role in `server.yml`; to
+suspend them temporarily, run `sudo systemctl disable --now
+restic-backup.timer` (a later provision re-enables it).
+
+## First provision
 
 Every provision probes the repository as `web_user` with `restic cat config`.
-An existing repository is left unchanged. A missing repository stops
-provisioning with instructions instead of initializing implicitly; other probe
-errors (authentication, network) also stop provisioning.
-
-Initialize a missing repository with a one-time extra variable:
-
-```bash
-trellis provision production --tags restic --extra-vars restic_backup_initialize=true
-```
-
-Never commit `restic_backup_initialize: true` to group variables.
-Initialization does not run a backup, and re-supplying the flag later is
-harmless because the role only initializes after an exact "repository absent"
-response.
-
-Ansible check mode skips the remote probe and initialization. It still
-validates configuration and reports a pending binary or unit installation.
+An existing repository is left unchanged, an absent repository is initialized,
+and any other probe error (authentication, network) stops provisioning.
+Initialization never overwrites an existing repository and does not run a
+backup.
 
 After provisioning, start and watch the first backup manually. It may take
 much longer than later incremental runs; if it exceeds the five-hour timeout,
@@ -115,25 +101,11 @@ Defaults are in [`defaults/main.yml`](defaults/main.yml).
 |---|---:|---|
 | `restic_backup_version` | `"0.19.1"` | Pinned restic release |
 | `restic_backup_checksums` | Architecture map | SHA-256 checksums for the official `.bz2` artifacts |
-| `restic_backup_enabled` | `true` | `false` stops and disables an existing timer |
 | `restic_backup_s3_bucket` | `""` | Existing bucket name, without `s3://`; required |
 | `restic_backup_s3_region` | `""` | AWS region; required |
 | `restic_backup_stack_name` | `""` | Stable stack identifier used in the repository prefix and host; required |
-| `restic_backup_insecure_no_password` | `false` | Must be explicitly set to `true` |
-| `restic_backup_initialize` | `false` | One-time CLI-only permission to initialize an absent repository |
 | `restic_backup_excluded_sites` | `[]` | `wordpress_sites` keys to omit |
-| `restic_backup_uploads_paths` | `{}` | Site-keyed absolute source path overrides |
-| `restic_backup_excludes` | `[]` | Relative restic exclude patterns applied within every selected source |
-| `restic_backup_site_excludes` | `{}` | Site-keyed lists of relative exclude patterns |
-| `restic_backup_on_calendar` | `["*-*-* 00/6:00:00"]` | systemd `OnCalendar` expressions (server local time) |
-| `restic_backup_randomized_delay_sec` | `30m` | Maximum systemd randomized delay |
-| `restic_backup_runtime_max_sec` | `5h` | Maximum service activation time |
-| `restic_backup_nice` | `10` | CPU scheduling niceness |
-| `restic_backup_io_scheduling_class` | `best-effort` | systemd I/O scheduling class |
-| `restic_backup_io_scheduling_priority` | `7` | Lowest best-effort I/O priority |
-| `restic_backup_memory_max` | `""` | Optional systemd `MemoryMax`; empty means unlimited |
-| `restic_backup_limit_upload_kib` | `0` | Optional restic upload limit in KiB/s; `0` means unlimited |
-| `restic_backup_s3_connections` | `0` | Optional S3 connection count; `0` keeps restic's default |
+| `restic_backup_excludes` | `[]` | restic exclude patterns relative to each site's uploads directory |
 | `restic_backup_uptime_kuma_push_url` | `""` | Optional Kuma push URL; the role replaces its status/message query values |
 
 The derived `restic_backup_repository`, `restic_backup_host`, and
@@ -141,63 +113,53 @@ The derived `restic_backup_repository`, `restic_backup_host`, and
 URL, host, cache directory, and `AWS_DEFAULT_REGION` used by provisioning and
 the service. Do not override them.
 
-### Sites, paths, and exclusions
+### Sites and exclusions
 
-The default source for a site is `{{ www_root }}/<wordpress_sites key>/shared/uploads`.
+Each selected site is backed up from `{{ www_root }}/<wordpress_sites key>/shared/uploads`.
 
 ```yaml
 restic_backup_excluded_sites:
   - retired.example.com
 
-restic_backup_uploads_paths:
-  media.example.com: /mnt/media/example-uploads
-
 restic_backup_excludes:
   - cache/**
   - "*.tmp"
-
-restic_backup_site_excludes:
-  media.example.com:
-    - generated/previews/**
 ```
 
-Overrides must name the real directory, not a symlink; the role never creates
-or changes ownership of a source directory. Exclusion patterns use restic
-syntax relative to the uploads root and are expanded to absolute,
-source-specific patterns, so a pattern for one site cannot exclude a same-named
-path in another site. Site keys must exist in `wordpress_sites`, and at least
-one site must remain enabled.
+Exclusion patterns use restic syntax and are expanded per site to absolute
+patterns, so a pattern cannot exclude a same-named path in another site.
+Excluded site keys must exist in `wordpress_sites`, and at least one site must
+remain selected. The role never creates or changes ownership of a source
+directory.
 
-At runtime a source that does not exist yet is skipped, because Trellis creates
-`shared/uploads` during the first deploy. Skipped sites are logged with their
-full path in journald and listed by name in the Kuma message. An existing
-non-directory or symlink source fails the run, an unreadable source fails
-through restic's own status 3, and if no usable source remains the run fails.
+At runtime a site whose uploads directory does not exist yet is skipped,
+because Trellis creates `shared/uploads` during the first deploy. Skipped sites
+are logged with their full path in journald and listed by name in the Kuma
+message. If no uploads directory exists the run fails; an unreadable file or
+directory fails through restic's own status 3.
 
 ## Runtime behavior
 
-`restic-backup.timer` starts `restic-backup.service` every six hours with up to
-30 minutes of random delay, `Persistent=true`, and a five-hour
-`TimeoutStartSec`. Provisioning only enables, starts, or restarts the timer.
-Because the timer is persistent, changing the schedule may trigger one
-catch-up backup shortly after provisioning; this is harmless.
+`restic-backup.timer` starts `restic-backup.service` at 00:00, 06:00, 12:00,
+and 18:00 server local time with up to 30 minutes of random delay,
+`Persistent=true`, and a five-hour `TimeoutStartSec`. Provisioning only
+enables, starts, or restarts the timer and never starts the service.
 
-The oneshot service runs as `web_user:web_group` with low CPU priority,
-best-effort I/O priority 7, `RESTIC_CACHE_DIR=/var/cache/restic-backups`, and
-read-only system and home views except for its cache and private temporary
-directory.
+The oneshot service runs as `web_user:web_group` with `Nice=10`, best-effort
+I/O priority 7, `RESTIC_CACHE_DIR=/var/cache/restic-backups`, a private
+temporary directory, and a read-only system view except for its cache. systemd
+prevents overlapping runs of the service, and restic locks the repository
+against concurrent maintenance.
 
-The wrapper takes a nonblocking lock, so a second invocation exits successfully
-without sending a false Kuma failure. Sites, paths, and exclusions are rendered
-into the wrapper at provision time; all usable paths are passed to one
-`restic backup` with `--group-by host` and `--skip-if-unchanged`. Restic's exit
-status is returned unchanged, including partial-backup status 3. On timeout,
-systemd terminates restic, and the wrapper reports the failure to Kuma before
-exiting. Kuma receives `up` after both a new snapshot and a successful
-unchanged run; a failed Kuma request is logged but never changes the result.
+All present uploads directories are passed to one `restic backup` with
+`--group-by host` and `--skip-if-unchanged`. Restic's exit status is returned
+unchanged, including partial-backup status 3. On timeout, systemd terminates
+restic and the wrapper reports the failure to Kuma before exiting. Kuma
+receives `up` after both a new snapshot and a successful unchanged run; a
+failed Kuma request is logged but never changes the result.
 
-Use systemd rather than invoking `/usr/local/sbin/restic-backup` directly so
-the root-only environment and service limits apply:
+Always run backups through systemd so the root-only environment and service
+limits apply; do not invoke `/usr/local/sbin/restic-backup` directly:
 
 ```bash
 sudo systemctl start restic-backup.service
@@ -206,8 +168,9 @@ sudo journalctl -u restic-backup.service
 sudo systemctl list-timers restic-backup.timer
 ```
 
-Set the Kuma heartbeat interval to six hours plus the random delay plus the
-observed maximum normal run time; allow extra time for the initial backup.
+Set the Kuma heartbeat interval to six hours plus the 30-minute random delay
+plus the observed maximum normal run time; allow extra time for the initial
+backup.
 
 ## AWS contract
 
@@ -311,24 +274,20 @@ restore_target="$(mktemp -d)"
 
 Complete this checklist against staging before production:
 
-- [ ] Run Ansible check mode successfully on a fresh and on a provisioned host.
-- [ ] Confirm normal provisioning refuses an absent repository.
-- [ ] Initialize once with the explicit CLI extra variable; confirm no backup
-      runs during provisioning.
+- [ ] Provision a host with an absent repository; confirm it is initialized and
+      no backup runs during provisioning.
 - [ ] Run a second provision and confirm idempotence.
 - [ ] Manually start and observe the complete first backup in journald.
 - [ ] Verify one snapshot contains every expected uploads root and that new S3
       objects use `INTELLIGENT_TIERING`.
 - [ ] Run again unchanged and confirm no snapshot is created; change a test
       file and confirm the next run creates a snapshot.
-- [ ] Exercise a site opt-out, path override, global exclusion, and per-site
-      exclusion without affecting another site's same-named path.
-- [ ] Confirm a missing source is named and skipped, and that an unreadable
-      source and zero usable sources each fail.
-- [ ] Confirm timeout termination reports Kuma down and overlapping starts do
-      not produce a false down notification.
+- [ ] Exercise a site opt-out and a global exclusion; confirm the exclusion
+      does not affect another site's same-named path.
+- [ ] Confirm a missing source is named and skipped, and that zero usable
+      sources fails.
+- [ ] Confirm timeout termination reports Kuma down.
 - [ ] Confirm Kuma success, backup failure, and Kuma endpoint failure behavior.
-- [ ] Confirm `restic_backup_enabled: false` stops and disables the timer.
 - [ ] Dry-run the documented retention policy using the maintenance identity.
 - [ ] Complete and verify a staged restore to a temporary target.
 

@@ -2,33 +2,23 @@
 
 set -uo pipefail
 
-readonly lock_file={{ restic_backup_cache_dir }}/backup.lock
 readonly host="${RESTIC_HOST:-unknown host}"
 readonly started_at="${SECONDS}"
 
 # Rendered at provision time from wordpress_sites.
-sites=()
-paths=()
-excludes=()
-{% for site, _ in wordpress_sites | dictsort if site not in restic_backup_excluded_sites %}
-{% set source = restic_backup_uploads_paths.get(site, www_root ~ '/' ~ site ~ '/shared/uploads') %}
-sites+=({{ site | quote }})
-paths+=({{ source | quote }})
-{% for pattern in restic_backup_excludes + restic_backup_site_excludes.get(site, []) %}
-excludes+=(--exclude {{ (source ~ '/' ~ pattern) | quote }})
+sites=(
+{% for site in wordpress_sites | dictsort | map(attribute=0) if site not in restic_backup_excluded_sites %}
+  {{ site | quote }}
 {% endfor %}
-{% endfor %}
-
-restic_options=(
-  --insecure-no-password
-  --option s3.storage-class=INTELLIGENT_TIERING
-{% if restic_backup_s3_connections | int > 0 %}
-  --option s3.connections={{ restic_backup_s3_connections | int }}
-{% endif %}
-{% if restic_backup_limit_upload_kib | int > 0 %}
-  --limit-upload {{ restic_backup_limit_upload_kib | int }}
-{% endif %}
 )
+excludes=(
+{% for site in wordpress_sites | dictsort | map(attribute=0) if site not in restic_backup_excluded_sites %}
+{% for pattern in restic_backup_excludes %}
+  --exclude {{ (www_root ~ '/' ~ site ~ '/shared/uploads/' ~ pattern) | quote }}
+{% endfor %}
+{% endfor %}
+)
+readonly www_root={{ www_root | quote }}
 
 {# Nothing below is templated; raw mode keeps Jinja from reading bash's ${#array[@]} as a comment tag. #}
 {% raw %}
@@ -55,41 +45,15 @@ notify_kuma() {
   fi
 }
 
-fail() {
-  local status="$1"
-  local message="$2"
-
-  log "ERROR: ${message}"
-  notify_kuma down "Backup for ${host} failed: ${message}"
-  exit "$status"
-}
-
-exec 9>"$lock_file" || fail 73 "unable to open lock file ${lock_file}"
-
-lock_status=0
-/usr/bin/flock --nonblock --conflict-exit-code 75 9 || lock_status=$?
-if ((lock_status == 75)); then
-  log "Another backup is active; this invocation will exit without notifying Kuma"
-  exit 0
-elif ((lock_status != 0)); then
-  fail "$lock_status" "flock failed with status ${lock_status}"
-fi
-
 present=()
 missing=()
-for i in "${!sites[@]}"; do
-  site="${sites[i]}"
-  path="${paths[i]}"
-
-  if [[ -L "$path" ]]; then
-    fail 66 "uploads path for ${site} is a symlink; configure its real directory: ${path}"
-  elif [[ ! -e "$path" ]]; then
+for site in "${sites[@]}"; do
+  path="${www_root}/${site}/shared/uploads"
+  if [[ -d "$path" ]]; then
+    present+=("$path")
+  else
     log "WARNING: skipping missing uploads path for ${site}: ${path}"
     missing+=("$site")
-  elif [[ ! -d "$path" ]]; then
-    fail 66 "uploads path for ${site} is not a directory: ${path}"
-  else
-    present+=("$path")
   fi
 done
 
@@ -99,7 +63,9 @@ if ((${#missing[@]} > 0)); then
 fi
 
 if ((${#present[@]} == 0)); then
-  fail 66 "no usable uploads paths remain${skipped}"
+  log "ERROR: no usable uploads paths remain${skipped}"
+  notify_kuma down "Backup for ${host} failed: no usable uploads paths remain${skipped}"
+  exit 66
 fi
 
 log "Starting one snapshot for ${#present[@]} uploads paths${skipped}"
@@ -108,7 +74,10 @@ log "Starting one snapshot for ${#present[@]} uploads paths${skipped}"
 # trap only keeps this script alive long enough to report the result to Kuma.
 trap ':' TERM
 
-/usr/local/bin/restic "${restic_options[@]}" backup \
+/usr/local/bin/restic \
+  --insecure-no-password \
+  --option s3.storage-class=INTELLIGENT_TIERING \
+  backup \
   --verbose \
   --group-by host \
   --skip-if-unchanged \

@@ -1,6 +1,5 @@
 ---
 - name: Reload systemd and restart restic backup timer
-  when: not ansible_check_mode or _restic_backup_timer_unit.stat.exists
   ansible.builtin.systemd:
     name: restic-backup.timer
     daemon_reload: true
