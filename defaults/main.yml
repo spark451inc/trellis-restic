@@ -17,6 +17,16 @@ restic_backup_stack_name: ""
 restic_backup_insecure_no_password: false
 restic_backup_initialize: false
 
+# Derived connection settings shared by provisioning and the systemd service.
+restic_backup_repository: "s3:s3.{{ restic_backup_s3_region }}.amazonaws.com/{{ restic_backup_s3_bucket }}/{{ restic_backup_stack_name }}/{{ env }}"
+restic_backup_host: "{{ restic_backup_stack_name }}-{{ env }}"
+restic_backup_cache_dir: /var/cache/restic-backups
+restic_backup_environment:
+  RESTIC_REPOSITORY: "{{ restic_backup_repository }}"
+  RESTIC_HOST: "{{ restic_backup_host }}"
+  RESTIC_CACHE_DIR: "{{ restic_backup_cache_dir }}"
+  AWS_DEFAULT_REGION: "{{ restic_backup_s3_region }}"
+
 # Site selection and paths
 restic_backup_excluded_sites: []
 restic_backup_uploads_paths: {}
@@ -26,12 +36,9 @@ restic_backup_uploads_paths: {}
 restic_backup_excludes: []
 restic_backup_site_excludes: {}
 
-# systemd timer schedule
+# systemd timer schedule: every six hours, plus a random delay.
 restic_backup_on_calendar:
-  - "*-*-* 00:00:00"
-  - "*-*-* 06:00:00"
-  - "*-*-* 12:00:00"
-  - "*-*-* 18:00:00"
+  - "*-*-* 00/6:00:00"
 restic_backup_randomized_delay_sec: 30m
 
 # Runtime controls

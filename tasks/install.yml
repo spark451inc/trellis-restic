@@ -3,8 +3,7 @@
   ansible.builtin.apt:
     name: bzip2
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    cache_valid_time: "{{ apt_cache_valid_time }}"
   become: true
 
 - name: Validate restic CPU architecture
@@ -111,8 +110,9 @@
         mode: "0755"
   always:
     - name: Remove restic staging directory
+      when: _restic_backup_staging.path is defined
       ansible.builtin.file:
-        path: "{{ _restic_backup_staging.path | default('/tmp/restic-install-not-created') }}"
+        path: "{{ _restic_backup_staging.path }}"
         state: absent
 
 - name: Verify restic installation

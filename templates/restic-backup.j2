@@ -2,16 +2,36 @@
 
 set -uo pipefail
 
-readonly sources_metadata=/etc/restic-backups/sources
-readonly excludes_file=/etc/restic-backups/excludes
-readonly state_dir=/var/cache/restic-backups
-readonly lock_file="${state_dir}/backup.lock"
+readonly lock_file={{ restic_backup_cache_dir }}/backup.lock
+readonly host="${RESTIC_HOST:-unknown host}"
 readonly started_at="${SECONDS}"
 
-restic_pid=
-terminated=0
-temporary_sources=
+# Rendered at provision time from wordpress_sites.
+sites=()
+paths=()
+excludes=()
+{% for site, _ in wordpress_sites | dictsort if site not in restic_backup_excluded_sites %}
+{% set source = restic_backup_uploads_paths.get(site, www_root ~ '/' ~ site ~ '/shared/uploads') %}
+sites+=({{ site | quote }})
+paths+=({{ source | quote }})
+{% for pattern in restic_backup_excludes + restic_backup_site_excludes.get(site, []) %}
+excludes+=(--exclude {{ (source ~ '/' ~ pattern) | quote }})
+{% endfor %}
+{% endfor %}
 
+restic_options=(
+  --insecure-no-password
+  --option s3.storage-class=INTELLIGENT_TIERING
+{% if restic_backup_s3_connections | int > 0 %}
+  --option s3.connections={{ restic_backup_s3_connections | int }}
+{% endif %}
+{% if restic_backup_limit_upload_kib | int > 0 %}
+  --limit-upload {{ restic_backup_limit_upload_kib | int }}
+{% endif %}
+)
+
+{# Nothing below is templated; raw mode keeps Jinja from reading bash's ${#array[@]} as a comment tag. #}
+{% raw %}
 log() {
   printf 'restic-backup: %s\n' "$*"
 }
@@ -35,48 +55,16 @@ notify_kuma() {
   fi
 }
 
-cleanup() {
-  if [[ -n "$temporary_sources" && -e "$temporary_sources" ]]; then
-    /usr/bin/rm -f -- "$temporary_sources" ||
-      log "WARNING: failed to remove temporary source list ${temporary_sources}"
-  fi
+fail() {
+  local status="$1"
+  local message="$2"
+
+  log "ERROR: ${message}"
+  notify_kuma down "Backup for ${host} failed: ${message}"
+  exit "$status"
 }
 
-handle_term() {
-  terminated=1
-  log "Received termination signal; stopping the active backup"
-  notify_kuma down "Backup for ${RESTIC_HOST:-unknown host} was terminated"
-  if [[ -n "$restic_pid" ]] && kill -0 "$restic_pid" 2>/dev/null; then
-    kill -TERM "$restic_pid" 2>/dev/null || true
-  fi
-}
-
-trap cleanup EXIT
-trap handle_term TERM
-
-required_variables=(
-  RESTIC_REPOSITORY
-  RESTIC_HOST
-  RESTIC_CACHE_DIR
-  RESTIC_BACKUP_REGION
-  RESTIC_BACKUP_STACK_NAME
-  RESTIC_BACKUP_ENV
-  RESTIC_BACKUP_LIMIT_UPLOAD_KIB
-  RESTIC_BACKUP_S3_CONNECTIONS
-)
-for variable in "${required_variables[@]}"; do
-  if [[ -z "${!variable:-}" ]]; then
-    log "ERROR: required environment variable ${variable} is unset"
-    notify_kuma down "Backup configuration is incomplete: ${variable} is unset"
-    exit 78
-  fi
-done
-
-if ! exec 9>"$lock_file"; then
-  log "ERROR: unable to open lock file ${lock_file}"
-  notify_kuma down "Backup for ${RESTIC_HOST} could not open its lock file"
-  exit 73
-fi
+exec 9>"$lock_file" || fail 73 "unable to open lock file ${lock_file}"
 
 lock_status=0
 /usr/bin/flock --nonblock --conflict-exit-code 75 9 || lock_status=$?
@@ -84,127 +72,58 @@ if ((lock_status == 75)); then
   log "Another backup is active; this invocation will exit without notifying Kuma"
   exit 0
 elif ((lock_status != 0)); then
-  log "ERROR: flock failed with status ${lock_status}"
-  notify_kuma down "Backup for ${RESTIC_HOST} could not acquire its lock"
-  exit "$lock_status"
+  fail "$lock_status" "flock failed with status ${lock_status}"
 fi
 
-if [[ ! -r "$sources_metadata" ]]; then
-  log "ERROR: source metadata is unreadable: ${sources_metadata}"
-  notify_kuma down "Backup for ${RESTIC_HOST} cannot read its source metadata"
-  exit 66
-fi
-
-if ! temporary_sources="$(/usr/bin/mktemp "${state_dir}/sources.XXXXXX")"; then
-  log "ERROR: unable to create a temporary source list"
-  notify_kuma down "Backup for ${RESTIC_HOST} cannot create its source list"
-  exit 73
-fi
-
-missing_sources=()
-usable_count=0
-while IFS=$'\t' read -r site path || [[ -n "${site}${path}" ]]; do
-  [[ -n "$site" && -n "$path" ]] || continue
+present=()
+missing=()
+for i in "${!sites[@]}"; do
+  site="${sites[i]}"
+  path="${paths[i]}"
 
   if [[ -L "$path" ]]; then
-    log "ERROR: uploads path for ${site} is a symlink; configure its real directory: ${path}"
-    notify_kuma down "Backup failed: ${site} uploads path is a symlink"
-    exit 66
-  fi
-
-  if [[ ! -e "$path" ]]; then
+    fail 66 "uploads path for ${site} is a symlink; configure its real directory: ${path}"
+  elif [[ ! -e "$path" ]]; then
     log "WARNING: skipping missing uploads path for ${site}: ${path}"
-    missing_sources+=("${site} (${path})")
-    continue
+    missing+=("$site")
+  elif [[ ! -d "$path" ]]; then
+    fail 66 "uploads path for ${site} is not a directory: ${path}"
+  else
+    present+=("$path")
   fi
+done
 
-  if [[ ! -d "$path" ]]; then
-    log "ERROR: uploads path for ${site} is not a directory: ${path}"
-    notify_kuma down "Backup failed: ${site} uploads path is not a directory"
-    exit 66
-  fi
-
-  if [[ ! -r "$path" || ! -x "$path" ]]; then
-    log "ERROR: uploads path for ${site} is unreadable: ${path}"
-    notify_kuma down "Backup failed: ${site} uploads path is unreadable"
-    exit 77
-  fi
-
-  printf '%s\n' "$path" >>"$temporary_sources"
-  ((usable_count += 1))
-done <"$sources_metadata"
-
-missing_message=
-if [[ -n "${missing_sources[0]+present}" ]]; then
-  printf -v missing_message '%s, ' "${missing_sources[@]}"
-  missing_message="; skipped missing sources: ${missing_message%, }"
+skipped=
+if ((${#missing[@]} > 0)); then
+  skipped="; skipped ${#missing[@]} missing site(s): ${missing[*]}"
 fi
 
-if ((usable_count == 0)); then
-  log "ERROR: no usable uploads paths remain${missing_message}"
-  notify_kuma down "Backup failed: no usable uploads paths${missing_message}"
-  exit 66
+if ((${#present[@]} == 0)); then
+  fail 66 "no usable uploads paths remain${skipped}"
 fi
 
-log "Starting one snapshot for ${usable_count} uploads paths${missing_message}"
+log "Starting one snapshot for ${#present[@]} uploads paths${skipped}"
 
-restic_arguments=(
-  --insecure-no-password
-  --option "s3.region=${RESTIC_BACKUP_REGION}"
-  --option s3.storage-class=INTELLIGENT_TIERING
-)
+# systemd signals the whole cgroup on timeout, so restic stops on its own; the
+# trap only keeps this script alive long enough to report the result to Kuma.
+trap ':' TERM
 
-if ((RESTIC_BACKUP_S3_CONNECTIONS > 0)); then
-  restic_arguments+=(--option "s3.connections=${RESTIC_BACKUP_S3_CONNECTIONS}")
-fi
-
-if ((RESTIC_BACKUP_LIMIT_UPLOAD_KIB > 0)); then
-  restic_arguments+=(--limit-upload "$RESTIC_BACKUP_LIMIT_UPLOAD_KIB")
-fi
-
-restic_arguments+=(
-  backup
-  --verbose
-  --files-from-verbatim "$temporary_sources"
-  --group-by host
-  --skip-if-unchanged
-  --tag "stack:${RESTIC_BACKUP_STACK_NAME}"
-  --tag "env:${RESTIC_BACKUP_ENV}"
-  --tag uploads
-)
-
-if [[ -s "$excludes_file" ]]; then
-  restic_arguments+=(--exclude-file "$excludes_file")
-fi
-
-if ((terminated)); then
-  exit 143
-fi
-
-/usr/local/bin/restic "${restic_arguments[@]}" &
-restic_pid=$!
-wait "$restic_pid"
+/usr/local/bin/restic "${restic_options[@]}" backup \
+  --verbose \
+  --group-by host \
+  --skip-if-unchanged \
+  "${excludes[@]}" \
+  "${present[@]}"
 backup_status=$?
-
-if ((terminated)) && ((backup_status >= 128)); then
-  wait "$restic_pid"
-  final_wait_status=$?
-  if ((final_wait_status != 127)); then
-    backup_status=$final_wait_status
-  fi
-fi
-restic_pid=
 
 elapsed=$((SECONDS - started_at))
 if ((backup_status == 0)); then
-  log "Backup completed successfully in ${elapsed}s${missing_message}"
-  notify_kuma up "Backup for ${RESTIC_HOST} succeeded in ${elapsed}s${missing_message}"
+  log "Backup completed successfully in ${elapsed}s${skipped}"
+  notify_kuma up "Backup for ${host} succeeded in ${elapsed}s${skipped}"
 else
-  log "ERROR: restic exited with status ${backup_status} after ${elapsed}s${missing_message}"
-  if ((!terminated)); then
-    notify_kuma down \
-      "Backup for ${RESTIC_HOST} failed with status ${backup_status}${missing_message}"
-  fi
+  log "ERROR: restic exited with status ${backup_status} after ${elapsed}s${skipped}"
+  notify_kuma down "Backup for ${host} failed with status ${backup_status}${skipped}"
 fi
 
 exit "$backup_status"
+{% endraw %}

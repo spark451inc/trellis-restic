@@ -1,15 +1,4 @@
 ---
-- name: Mark restic backup timer current before restart
-  listen: Reload systemd and restart restic backup timer
-  when: not ansible_check_mode or _restic_backup_timer_unit.stat.exists
-  ansible.builtin.file:
-    path: /var/lib/systemd/timers/stamp-restic-backup.timer
-    state: touch
-    owner: root
-    group: root
-    mode: "0644"
-  become: true
-
 - name: Reload systemd and restart restic backup timer
   when: not ansible_check_mode or _restic_backup_timer_unit.stat.exists
   ansible.builtin.systemd:

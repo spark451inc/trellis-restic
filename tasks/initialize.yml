@@ -1,61 +1,40 @@
 ---
-- name: Probe restic repository
+- name: Check the restic repository
   when: not ansible_check_mode
-  ansible.builtin.command:
-    argv:
-      - /usr/local/bin/restic
-      - --repo
-      - >-
-        s3:s3.{{ restic_backup_s3_region }}.amazonaws.com/{{
-        restic_backup_s3_bucket }}/{{ restic_backup_stack_name }}/{{ env }}
-      - --insecure-no-password
-      - --option
-      - "s3.region={{ restic_backup_s3_region }}"
-      - --option
-      - s3.storage-class=INTELLIGENT_TIERING
-      - cat
-      - config
-      - --no-cache
-  environment:
-    RESTIC_HOST: "{{ restic_backup_stack_name }}-{{ env }}"
-    RESTIC_CACHE_DIR: /var/cache/restic-backups
+  environment: "{{ restic_backup_environment }}"
   become: true
   become_user: "{{ web_user }}"
-  register: _restic_backup_repository_probe
-  changed_when: false
-  failed_when: _restic_backup_repository_probe.rc not in [0, 10]
+  block:
+    - name: Probe restic repository
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/restic
+          - --insecure-no-password
+          - --no-cache
+          - cat
+          - config
+      register: _restic_backup_repository_probe
+      changed_when: false
+      failed_when: _restic_backup_repository_probe.rc not in [0, 10]
 
-- name: Require explicit repository initialization
-  when:
-    - not ansible_check_mode
-    - _restic_backup_repository_probe.rc == 10
-    - not (restic_backup_initialize | bool)
-  ansible.builtin.fail:
-    msg: >-
-      The restic repository does not exist. Re-run this provision once with
-      -e restic_backup_initialize=true; do not persist that setting in inventory.
+    - name: Require explicit repository initialization
+      when:
+        - _restic_backup_repository_probe.rc == 10
+        - not restic_backup_initialize | bool
+      ansible.builtin.fail:
+        msg: >-
+          The restic repository does not exist. Re-run this provision once with
+          -e restic_backup_initialize=true; do not persist that setting in inventory.
 
-- name: Initialize restic repository
-  when:
-    - not ansible_check_mode
-    - _restic_backup_repository_probe.rc == 10
-    - restic_backup_initialize | bool
-  ansible.builtin.command:
-    argv:
-      - /usr/local/bin/restic
-      - --repo
-      - >-
-        s3:s3.{{ restic_backup_s3_region }}.amazonaws.com/{{
-        restic_backup_s3_bucket }}/{{ restic_backup_stack_name }}/{{ env }}
-      - --insecure-no-password
-      - --option
-      - "s3.region={{ restic_backup_s3_region }}"
-      - --option
-      - s3.storage-class=INTELLIGENT_TIERING
-      - init
-  environment:
-    RESTIC_HOST: "{{ restic_backup_stack_name }}-{{ env }}"
-    RESTIC_CACHE_DIR: /var/cache/restic-backups
-  become: true
-  become_user: "{{ web_user }}"
-  changed_when: true
+    - name: Initialize restic repository
+      when:
+        - _restic_backup_repository_probe.rc == 10
+        - restic_backup_initialize | bool
+      ansible.builtin.command:
+        argv:
+          - /usr/local/bin/restic
+          - --insecure-no-password
+          - --option
+          - s3.storage-class=INTELLIGENT_TIERING
+          - init
+      changed_when: true
