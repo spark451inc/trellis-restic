@@ -36,3 +36,16 @@
     mode: "0755"
     validate: /usr/bin/bash -n %s
   become: true
+
+- name: Verify restic repository is reachable
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/restic
+      - --insecure-no-password
+      - --no-cache
+      - cat
+      - config
+  environment: "{{ restic_backup_environment }}"
+  become: true
+  become_user: "{{ web_user }}"
+  changed_when: false

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 
-set -uo pipefail
+set -u
 
 readonly host="${RESTIC_HOST:-unknown host}"
-readonly started_at="${SECONDS}"
 
-# Rendered at provision time from wordpress_sites.
-sites=(
+# Rendered at provision time from wordpress_sites. Trellis creates shared/uploads
+# on a site's first deploy; until then restic skips the path and exits 3.
+uploads=(
 {% for site in wordpress_sites | dictsort | map(attribute=0) if site not in restic_backup_excluded_sites %}
-  {{ site | quote }}
+  {{ (www_root ~ '/' ~ site ~ '/shared/uploads') | quote }}
 {% endfor %}
 )
 excludes=(
@@ -18,10 +18,7 @@ excludes=(
 {% endfor %}
 {% endfor %}
 )
-readonly www_root={{ www_root | quote }}
 
-{# Nothing below is templated; raw mode keeps Jinja from reading bash's ${#array[@]} as a comment tag. #}
-{% raw %}
 log() {
   printf 'restic-backup: %s\n' "$*"
 }
@@ -45,31 +42,6 @@ notify_kuma() {
   fi
 }
 
-present=()
-missing=()
-for site in "${sites[@]}"; do
-  path="${www_root}/${site}/shared/uploads"
-  if [[ -d "$path" ]]; then
-    present+=("$path")
-  else
-    log "WARNING: skipping missing uploads path for ${site}: ${path}"
-    missing+=("$site")
-  fi
-done
-
-skipped=
-if ((${#missing[@]} > 0)); then
-  skipped="; skipped ${#missing[@]} missing site(s): ${missing[*]}"
-fi
-
-if ((${#present[@]} == 0)); then
-  log "ERROR: no usable uploads paths remain${skipped}"
-  notify_kuma down "Backup for ${host} failed: no usable uploads paths remain${skipped}"
-  exit 66
-fi
-
-log "Starting one snapshot for ${#present[@]} uploads paths${skipped}"
-
 # systemd signals the whole cgroup on timeout, so restic stops on its own; the
 # trap only keeps this script alive long enough to report the result to Kuma.
 trap ':' TERM
@@ -82,17 +54,15 @@ trap ':' TERM
   --group-by host \
   --skip-if-unchanged \
   "${excludes[@]}" \
-  "${present[@]}"
-backup_status=$?
+  "${uploads[@]}"
+status=$?
 
-elapsed=$((SECONDS - started_at))
-if ((backup_status == 0)); then
-  log "Backup completed successfully in ${elapsed}s${skipped}"
-  notify_kuma up "Backup for ${host} succeeded in ${elapsed}s${skipped}"
+if ((status == 0)); then
+  log "Backup completed in ${SECONDS}s"
+  notify_kuma up "Backup for ${host} succeeded in ${SECONDS}s"
 else
-  log "ERROR: restic exited with status ${backup_status} after ${elapsed}s${skipped}"
-  notify_kuma down "Backup for ${host} failed with status ${backup_status}${skipped}"
+  log "ERROR: restic exited with status ${status} after ${SECONDS}s"
+  notify_kuma down "Backup for ${host} failed with status ${status}"
 fi
 
-exit "$backup_status"
-{% endraw %}
+exit "$status"

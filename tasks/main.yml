@@ -14,20 +14,12 @@
       restic_backup_stack_name; restic_backup_excluded_sites and
       restic_backup_excludes must be lists, excluded sites must exist in
       wordpress_sites, and at least one site must remain selected.
-  tags: [restic, backups]
 
 - name: Install restic
   ansible.builtin.import_tasks: install.yml
-  tags: [restic, backups, restic-install]
 
 - name: Configure restic backups
   ansible.builtin.import_tasks: configure.yml
-  tags: [restic, backups, restic-configure]
-
-- name: Initialize restic repository
-  ansible.builtin.import_tasks: initialize.yml
-  tags: [restic, backups, restic-initialize]
 
 - name: Schedule restic backups
   ansible.builtin.import_tasks: schedule.yml
-  tags: [restic, backups, restic-schedule]

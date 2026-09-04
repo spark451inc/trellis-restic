@@ -6,14 +6,6 @@
     cache_valid_time: "{{ apt_cache_valid_time }}"
   become: true
 
-- name: Validate restic CPU architecture
-  ansible.builtin.assert:
-    that:
-      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
-    fail_msg: >-
-      Unsupported CPU architecture {{ ansible_facts['architecture'] }}.
-      Restic is configured for x86_64 and aarch64.
-
 - name: Select restic release artifact
   ansible.builtin.set_fact:
     _restic_backup_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"

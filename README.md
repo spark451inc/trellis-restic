@@ -2,9 +2,8 @@
 
 A standalone Ansible role that installs restic and schedules backups of uploads
 for remote [Roots Trellis](https://roots.io/trellis/) WordPress servers. Every
-six hours it creates one snapshot containing every available site's
-`shared/uploads` directory and stores it in an existing Amazon S3 bucket under
-`<stack>/<env>`.
+six hours it creates one snapshot containing every site's `shared/uploads`
+directory and stores it in an existing Amazon S3 bucket under `<stack>/<env>`.
 
 Database backups are not included. Configure and verify a separate database
 backup system.
@@ -16,8 +15,9 @@ backup system.
   `wordpress_sites`, `apt_cache_valid_time`, and the `curl` package installed
   by the `common` role
 - Ansible 2.10 or newer
-- An existing S3 bucket and the EC2 instance-profile permissions described in
-  [AWS contract](#aws-contract); no static AWS keys or AWS CLI
+- An existing S3 bucket, an initialized restic repository, and the EC2
+  instance-profile permissions described in [AWS contract](#aws-contract); no
+  static AWS keys or AWS CLI
 - One repository-writing host per stack/environment pair
 
 ## Security model
@@ -32,6 +32,30 @@ environment file is root-only. systemd still injects it into a process running
 as `web_user`, and PHP-FPM runs as that same account, so it is not isolated from
 `web_user`. The EC2 instance profile is host-wide; running restic as `web_user`
 limits local filesystem access, not AWS credential access.
+
+## Creating a stack/environment
+
+Do this once per `<stack>/<env>` pair, from your workstation, before the first
+provision:
+
+1. Confirm the shared bucket exists and matches the [AWS contract](#aws-contract).
+2. Create the instance profile for `<stack>/<env>` with the host permissions
+   from the AWS contract.
+3. Initialize the repository using the maintenance identity. Provisioning never
+   does this; the repository must already exist:
+
+   ```bash
+   AWS_DEFAULT_REGION=REGION restic \
+     -r s3:s3.REGION.amazonaws.com/BUCKET/STACK/ENV \
+     --insecure-no-password \
+     --option s3.storage-class=INTELLIGENT_TIERING \
+     init
+   ```
+
+4. Attach the instance profile to the EC2 host.
+5. Configure the environment in Trellis (see [Install in Trellis](#install-in-trellis)).
+6. Provision. The role fails the provision if the repository is absent or
+   unreachable; fix the cause and re-run.
 
 ## Install in Trellis
 
@@ -75,18 +99,17 @@ To stop backups on a host, remove or condition the role in `server.yml`; to
 suspend them temporarily, run `sudo systemctl disable --now
 restic-backup.timer` (a later provision re-enables it).
 
-## First provision
+## Provisioning
 
-Every provision probes the repository as `web_user` with `restic cat config`.
-An existing repository is left unchanged, an absent repository is initialized,
-and any other probe error (authentication, network) stops provisioning.
-Initialization never overwrites an existing repository and does not run a
-backup.
+Every provision runs `restic cat config` as `web_user` against the repository.
+Any error (absent repository, authentication, network) stops provisioning. The
+role never initializes a repository and never runs a backup during
+provisioning.
 
-After provisioning, start and watch the first backup manually. It may take
-much longer than later incremental runs; if it exceeds the five-hour timeout,
-already uploaded data stays in the repository and the next scheduled run
-resumes from it:
+After the first provision, start and watch the first backup manually. It may
+take much longer than later incremental runs; if it exceeds the five-hour
+timeout, already uploaded data stays in the repository and the next scheduled
+run resumes from it:
 
 ```bash
 sudo systemctl start restic-backup.service
@@ -123,27 +146,25 @@ restic_backup_excluded_sites:
 
 restic_backup_excludes:
   - cache/**
-  - "*.tmp"
+  - "**/*.tmp"
 ```
 
-Exclusion patterns use restic syntax and are expanded per site to absolute
-patterns, so a pattern cannot exclude a same-named path in another site.
-Excluded site keys must exist in `wordpress_sites`, and at least one site must
-remain selected. The role never creates or changes ownership of a source
-directory.
+Exclusion patterns use restic syntax and are anchored at each site's uploads
+root, so a pattern cannot exclude a same-named path in another site. `*` never
+crosses a `/`; use `**/` to match at any depth. Excluded site keys must exist in
+`wordpress_sites`, and at least one site must remain selected. The role never
+creates or changes ownership of a source directory.
 
-At runtime a site whose uploads directory does not exist yet is skipped,
-because Trellis creates `shared/uploads` during the first deploy. Skipped sites
-are logged with their full path in journald and listed by name in the Kuma
-message. If no uploads directory exists the run fails; an unreadable file or
-directory fails through restic's own status 3.
+Until a site's first deploy its uploads path does not exist; restic skips it
+with a warning, exits 3, and Kuma shows down. Deploy the site.
 
 ## Runtime behavior
 
 `restic-backup.timer` starts `restic-backup.service` at 00:00, 06:00, 12:00,
 and 18:00 server local time with up to 30 minutes of random delay,
-`Persistent=true`, and a five-hour `TimeoutStartSec`. Provisioning only
-enables, starts, or restarts the timer and never starts the service.
+`Persistent=true`, and a five-hour `TimeoutStartSec`. Provisioning enables or
+restarts the timer; because of `Persistent=true`, that starts the service
+immediately only if a scheduled run was missed while the timer was stopped.
 
 The oneshot service runs as `web_user:web_group` with `Nice=10`, best-effort
 I/O priority 7, `RESTIC_CACHE_DIR=/var/cache/restic-backups`, a private
@@ -151,12 +172,13 @@ temporary directory, and a read-only system view except for its cache. systemd
 prevents overlapping runs of the service, and restic locks the repository
 against concurrent maintenance.
 
-All present uploads directories are passed to one `restic backup` with
+All selected uploads directories are passed to one `restic backup` with
 `--group-by host` and `--skip-if-unchanged`. Restic's exit status is returned
-unchanged, including partial-backup status 3. On timeout, systemd terminates
-restic and the wrapper reports the failure to Kuma before exiting. Kuma
-receives `up` after both a new snapshot and a successful unchanged run; a
-failed Kuma request is logged but never changes the result.
+unchanged and any nonzero status, including partial-backup status 3, reports
+`down` to Kuma. On timeout, systemd terminates restic and the wrapper reports
+the failure to Kuma before exiting. Kuma receives `up` after both a new
+snapshot and a successful unchanged run; a failed Kuma request is logged but
+never changes the result.
 
 Always run backups through systemd so the root-only environment and service
 limits apply; do not invoke `/usr/local/sbin/restic-backup` directly:
@@ -180,17 +202,20 @@ or OpenTofu implementation should supply the following.
 Shared bucket:
 
 - S3 Block Public Access, SSE-S3 default encryption, and versioning enabled
-- Noncurrent object versions expired after 30 days
+- Noncurrent object versions expired after 180 days. restic never overwrites a
+  live object, so noncurrent versions come only from lock churn, `prune`, or
+  an accident; this window is the only undo for a bad retention policy or an
+  overwritten pack
 - S3 Intelligent-Tiering without the optional Archive Access tiers
 - Incomplete multipart uploads aborted and expired delete markers removed
 - No lifecycle expiration of live restic objects; no Object Lock initially
 
 Every repository write in this role specifies
-`s3.storage-class=INTELLIGENT_TIERING`, and the region is always supplied via
-`AWS_DEFAULT_REGION` because `s3:GetBucketLocation` is not granted. External
-write operations, including `forget`, `prune`, and `repack`, must do the same.
+`s3.storage-class=INTELLIGENT_TIERING` and supplies the region via
+`AWS_DEFAULT_REGION`. External write operations, including `init`, `forget`,
+`prune`, and `repack`, must do the same.
 
-Per-stack/environment instance profile, granting only:
+Per-stack/environment instance profile (the host), granting only:
 
 - `s3:ListBucket` on the shared bucket, scoped by `s3:prefix` to
   `<stack>/<env>` and `<stack>/<env>/*`
@@ -199,21 +224,34 @@ Per-stack/environment instance profile, granting only:
 
 Do not grant `s3:DeleteObjectVersion` or install static AWS keys. The limited
 delete permission allows restic's normal locking but not retention/prune.
-`PutObject` can still overwrite a current key; versioning provides a 30-day
+`PutObject` can still overwrite a current key; versioning provides the
 recovery window rather than preventing that, and this residual risk is
 accepted.
 
+Maintenance identity (the operator, from a workstation), granting:
+
+- `s3:ListBucket` and `s3:ListBucketVersions` on the shared bucket, scoped by
+  `s3:prefix` to `<stack>/<env>` and `<stack>/<env>/*`
+- `s3:GetObject`, `s3:GetObjectVersion`, `s3:PutObject`, and
+  `s3:DeleteObject` on `<stack>/<env>/*`
+
+It is used for `init`, retention, integrity checks, restores, and recovery. To
+recover from an overwritten or corrupted object, restore the noncurrent
+versions under `<stack>/<env>/` with this identity, then run `restic check`.
+
 ## External maintenance and recovery
 
-Retention, integrity checks, and restores are privileged operator workflows
-using an external maintenance identity with the additional permissions each
-operation needs. For every maintenance command:
+Retention, integrity checks, and restores are operator workflows using the
+maintenance identity. For every maintenance command:
 
 1. Stop `restic-backup.timer`.
 2. Wait for any active `restic-backup.service` run to finish; do not terminate
    a healthy backup.
-3. Run the maintenance command from the privileged context.
-4. Always restart `restic-backup.timer`, even after a failure (use a shell
+3. Run `restic unlock` to remove stale locks left by an interrupted run. It
+   only removes locks that are stale; a live run refreshes its lock every few
+   minutes.
+4. Run the maintenance command.
+5. Always restart `restic-backup.timer`, even after a failure (use a shell
    trap or equivalent).
 
 Never delete live S3 repository objects directly.
@@ -223,10 +261,12 @@ export RESTIC_REPOSITORY='s3:s3.REGION.amazonaws.com/BUCKET/STACK/ENV'
 export AWS_DEFAULT_REGION=REGION
 
 restic_common=(
-  /usr/local/bin/restic
+  restic
   --insecure-no-password
   --option s3.storage-class=INTELLIGENT_TIERING
 )
+
+"${restic_common[@]}" unlock
 ```
 
 ### Monthly retention
@@ -248,35 +288,53 @@ grouped by host:
 ### Weekly integrity check
 
 Run `restic check` at least weekly with sampled data reads, using the same
-stop-timer, wait, run, always-restart procedure so its exclusive lock cannot
-collide with a backup:
+stop-timer, wait, unlock, run, always-restart procedure so its exclusive lock
+cannot collide with a backup:
 
 ```bash
 "${restic_common[@]}" check --read-data-subset=5%
 ```
 
-Investigate failures quickly enough to stay within the 30-day noncurrent
+Investigate failures quickly enough to stay within the 180-day noncurrent
 version recovery window.
 
 ### Quarterly staged restore
 
-Restore to a temporary target, verify the result, and only then plan a
-separate production recovery. This role intentionally provides no in-place
+Restore one site to a temporary target, verify the result, and only then plan
+a separate production recovery. This role intentionally provides no in-place
 production restore helper.
 
 ```bash
 restore_target="$(mktemp -d)"
 "${restic_common[@]}" snapshots --host STACK-ENV
-"${restic_common[@]}" restore latest --host STACK-ENV --target "$restore_target"
+"${restic_common[@]}" ls latest --host STACK-ENV /srv/www/SITE/shared/uploads
+"${restic_common[@]}" restore latest --host STACK-ENV \
+  --include /srv/www/SITE/shared/uploads --target "$restore_target"
 ```
+
+Omit `--include` to restore every site.
+
+## Future work
+
+Maintenance is manual today. A scheduled off-host job (for example an ECS
+Fargate task) running the maintenance identity could automate `unlock`,
+`check`, `forget`, and `prune`. Before building it:
+
+- It must run `restic unlock` first and use `--retry-lock`, and the backup
+  wrapper must gain the same, so a killed job cannot leave an exclusive lock
+  that blocks every backup and a running backup cannot fail the job. That
+  change also retires the stop-timer procedure above.
+- Its restic version must be pinned together with `restic_backup_version`.
+- The 180-day noncurrent retention is a prerequisite for any automated `prune`.
 
 ## Manual acceptance checklist
 
 Complete this checklist against staging before production:
 
-- [ ] Provision a host with an absent repository; confirm it is initialized and
-      no backup runs during provisioning.
-- [ ] Run a second provision and confirm idempotence.
+- [ ] Provision a host against an absent repository; confirm provisioning
+      fails at the repository check with a clear message and no backup runs.
+- [ ] Initialize the repository from the workstation, provision again, and
+      confirm success; run a third provision and confirm idempotence.
 - [ ] Manually start and observe the complete first backup in journald.
 - [ ] Verify one snapshot contains every expected uploads root and that new S3
       objects use `INTELLIGENT_TIERING`.
@@ -284,14 +342,14 @@ Complete this checklist against staging before production:
       file and confirm the next run creates a snapshot.
 - [ ] Exercise a site opt-out and a global exclusion; confirm the exclusion
       does not affect another site's same-named path.
-- [ ] Confirm a missing source is named and skipped, and that zero usable
-      sources fails.
+- [ ] Confirm a not-yet-deployed site produces a restic warning, status 3, and
+      Kuma down, and that the run succeeds after the site's first deploy.
 - [ ] Confirm timeout termination reports Kuma down.
 - [ ] Confirm Kuma success, backup failure, and Kuma endpoint failure behavior.
 - [ ] Dry-run the documented retention policy using the maintenance identity.
-- [ ] Complete and verify a staged restore to a temporary target.
+- [ ] Complete and verify a staged single-site restore to a temporary target.
 
 ## Releases
 
-Publish immutable semantic tags such as `v1.0.0` and pin Trellis `galaxy.yml`
-to a tested tag.
+Publish immutable semantic tags such as `v1.0.0` only after the acceptance
+checklist has passed on staging, and pin Trellis `galaxy.yml` to that tag.
