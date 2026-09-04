@@ -1,0 +1,4 @@
+{% for name, value in restic_backup_environment.items() %}
+{{ name }}={{ value | quote }}
+{% endfor %}
+RESTIC_BACKUP_KUMA_URL={{ restic_backup_uptime_kuma_push_url | quote }}

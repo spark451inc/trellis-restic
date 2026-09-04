@@ -1,0 +1,44 @@
+---
+- name: Install restic decompression dependency
+  ansible.builtin.apt:
+    name: bzip2
+    state: present
+    cache_valid_time: "{{ apt_cache_valid_time }}"
+  become: true
+
+- name: Select restic release artifact
+  ansible.builtin.set_fact:
+    _restic_backup_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"
+
+- name: Download restic release
+  ansible.builtin.get_url:
+    url: >-
+      https://github.com/restic/restic/releases/download/v{{
+      restic_backup_version }}/restic_{{ restic_backup_version }}_linux_{{
+      _restic_backup_arch }}.bz2
+    dest: /usr/local/src/restic_{{ restic_backup_version }}_linux_{{ _restic_backup_arch }}.bz2
+    checksum: "{{ restic_backup_checksums[_restic_backup_arch] }}"
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+
+- name: Decompress restic release
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/bzip2
+      - --decompress
+      - --keep
+      - /usr/local/src/restic_{{ restic_backup_version }}_linux_{{ _restic_backup_arch }}.bz2
+    creates: /usr/local/src/restic_{{ restic_backup_version }}_linux_{{ _restic_backup_arch }}
+  become: true
+
+- name: Install restic binary
+  ansible.builtin.copy:
+    src: /usr/local/src/restic_{{ restic_backup_version }}_linux_{{ _restic_backup_arch }}
+    remote_src: true
+    dest: /usr/local/bin/restic
+    owner: root
+    group: root
+    mode: "0755"
+  become: true

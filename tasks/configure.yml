@@ -1,0 +1,53 @@
+---
+- name: Create restic backup configuration directory
+  ansible.builtin.file:
+    path: /etc/restic-backups
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Create private restic cache directory
+  ansible.builtin.file:
+    path: "{{ restic_backup_cache_dir }}"
+    state: directory
+    owner: "{{ web_user }}"
+    group: "{{ web_group }}"
+    mode: "0700"
+  become: true
+
+- name: Write restic runtime environment
+  ansible.builtin.template:
+    src: environment.j2
+    dest: /etc/restic-backups/environment
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  become: true
+
+- name: Install restic backup wrapper
+  ansible.builtin.template:
+    src: restic-backup.j2
+    dest: /usr/local/sbin/restic-backup
+    owner: root
+    group: root
+    mode: "0755"
+    validate: /usr/bin/bash -n %s
+  become: true
+
+- name: Verify restic repository is reachable
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/restic
+      - --insecure-no-password
+      - --no-cache
+      - --option
+      - s3.storage-class=INTELLIGENT_TIERING
+      - cat
+      - config
+  environment: "{{ restic_backup_environment }}"
+  become: true
+  become_user: "{{ web_user }}"
+  changed_when: false

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+set -u
+
+readonly host="${RESTIC_HOST:-unknown host}"
+
+# Rendered at provision time from wordpress_sites. Trellis creates shared/uploads
+# on a site's first deploy; until then restic skips the path and exits 3.
+uploads=(
+{% for site in wordpress_sites | dictsort | map(attribute=0) if site not in restic_backup_excluded_sites %}
+  {{ (www_root ~ '/' ~ site ~ '/shared/uploads') | quote }}
+{% endfor %}
+)
+excludes=(
+{% for site in wordpress_sites | dictsort | map(attribute=0) if site not in restic_backup_excluded_sites %}
+{% for pattern in restic_backup_excludes %}
+  --exclude {{ (www_root ~ '/' ~ site ~ '/shared/uploads/' ~ pattern) | quote }}
+{% endfor %}
+{% endfor %}
+)
+
+log() {
+  printf 'restic-backup: %s\n' "$*"
+}
+
+notify_kuma() {
+  local status="$1"
+  local message="$2"
+
+  [[ -n "${RESTIC_BACKUP_KUMA_URL:-}" ]] || return 0
+
+  if ! /usr/bin/curl \
+    --fail \
+    --silent \
+    --show-error \
+    --max-time 15 \
+    --get \
+    --data-urlencode "status=${status}" \
+    --data-urlencode "msg=${message}" \
+    "${RESTIC_BACKUP_KUMA_URL%%\?*}" >/dev/null; then
+    log "WARNING: Uptime Kuma notification failed"
+  fi
+}
+
+# systemd signals the whole cgroup on timeout, so restic stops on its own; the
+# trap only keeps this script alive long enough to report the result to Kuma.
+trap ':' TERM
+
+/usr/local/bin/restic \
+  --insecure-no-password \
+  --option s3.storage-class=INTELLIGENT_TIERING \
+  backup \
+  --verbose \
+  --group-by host \
+  --skip-if-unchanged \
+  "${excludes[@]}" \
+  "${uploads[@]}"
+status=$?
+
+if ((status == 0)); then
+  log "Backup completed in ${SECONDS}s"
+  notify_kuma up "Backup for ${host} succeeded in ${SECONDS}s"
+else
+  log "ERROR: restic exited with status ${status} after ${SECONDS}s"
+  notify_kuma down "Backup for ${host} failed with status ${status}"
+fi
+
+exit "$status"

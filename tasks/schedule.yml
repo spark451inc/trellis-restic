@@ -1,0 +1,30 @@
+---
+- name: Install restic backup service
+  ansible.builtin.template:
+    src: restic-backup.service.j2
+    dest: /etc/systemd/system/restic-backup.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd and restart restic backup timer
+  become: true
+
+- name: Install restic backup timer
+  ansible.builtin.copy:
+    src: restic-backup.timer
+    dest: /etc/systemd/system/restic-backup.timer
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd and restart restic backup timer
+  become: true
+
+- name: Apply restic systemd unit changes
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start restic backup timer
+  ansible.builtin.systemd:
+    name: restic-backup.timer
+    enabled: true
+    state: started
+  become: true

@@ -1,0 +1,31 @@
+---
+# Update the version and compressed-artifact checksums together.
+restic_backup_version: "0.19.1"
+restic_backup_checksums:
+  amd64: sha256:f415415624dcc452f2a02b8c33641791a8c6d6d3b65bbb3543fcf9a25151585c
+  arm64: sha256:a5f64aaab53d51e311fa3829124c5b703f2d14cf187d8640b6be3b2b49376465
+
+# Existing S3 destination. The repository path is <stack>/<env>.
+restic_backup_s3_bucket: ""
+restic_backup_s3_region: ""
+restic_backup_stack_name: ""
+
+# Derived connection settings shared by provisioning and the systemd service.
+restic_backup_repository: "s3:s3.{{ restic_backup_s3_region }}.amazonaws.com/{{ restic_backup_s3_bucket }}/{{ restic_backup_stack_name }}/{{ env }}"
+restic_backup_host: "{{ restic_backup_stack_name }}-{{ env }}"
+restic_backup_cache_dir: /var/cache/restic-backups
+restic_backup_environment:
+  RESTIC_REPOSITORY: "{{ restic_backup_repository }}"
+  RESTIC_HOST: "{{ restic_backup_host }}"
+  RESTIC_CACHE_DIR: "{{ restic_backup_cache_dir }}"
+  AWS_DEFAULT_REGION: "{{ restic_backup_s3_region }}"
+
+# wordpress_sites keys to skip.
+restic_backup_excluded_sites: []
+
+# restic exclude patterns relative to each site's uploads directory. They are
+# expanded per site so a pattern cannot affect another site's same-named path.
+restic_backup_excludes: []
+
+# Optional Uptime Kuma push monitor URL.
+restic_backup_uptime_kuma_push_url: ""

@@ -1,0 +1,19 @@
+[Unit]
+Description=Restic backup of WordPress uploads
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User={{ web_user }}
+Group={{ web_group }}
+EnvironmentFile=/etc/restic-backups/environment
+ExecStart=/usr/local/sbin/restic-backup
+TimeoutStartSec=5h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths={{ restic_backup_cache_dir }}

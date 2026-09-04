@@ -1,0 +1,25 @@
+---
+- name: Validate restic backup settings
+  ansible.builtin.assert:
+    that:
+      - restic_backup_s3_bucket | length > 0
+      - restic_backup_s3_region | length > 0
+      - restic_backup_stack_name | length > 0
+      - restic_backup_excluded_sites is not string
+      - restic_backup_excludes is not string
+      - restic_backup_excluded_sites | difference(wordpress_sites.keys()) | length == 0
+      - wordpress_sites.keys() | difference(restic_backup_excluded_sites) | length > 0
+    fail_msg: >-
+      Set restic_backup_s3_bucket, restic_backup_s3_region, and
+      restic_backup_stack_name; restic_backup_excluded_sites and
+      restic_backup_excludes must be lists, excluded sites must exist in
+      wordpress_sites, and at least one site must remain selected.
+
+- name: Install restic
+  ansible.builtin.import_tasks: install.yml
+
+- name: Configure restic backups
+  ansible.builtin.import_tasks: configure.yml
+
+- name: Schedule restic backups
+  ansible.builtin.import_tasks: schedule.yml
