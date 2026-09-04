@@ -43,6 +43,8 @@
       - /usr/local/bin/restic
       - --insecure-no-password
       - --no-cache
+      - --option
+      - s3.storage-class=INTELLIGENT_TIERING
       - cat
       - config
   environment: "{{ restic_backup_environment }}"

@@ -36,7 +36,8 @@ limits local filesystem access, not AWS credential access.
 ## Creating a stack/environment
 
 Do this once per `<stack>/<env>` pair, from your workstation, before the first
-provision:
+provision (the acceptance checklist deliberately provisions once before step 3
+to observe the documented failure):
 
 1. Confirm the shared bucket exists and matches the [AWS contract](#aws-contract).
 2. Create the instance profile for `<stack>/<env>` with the host permissions
@@ -149,11 +150,13 @@ restic_backup_excludes:
   - "**/*.tmp"
 ```
 
-Exclusion patterns use restic syntax and are anchored at each site's uploads
-root, so a pattern cannot exclude a same-named path in another site. `*` never
-crosses a `/`; use `**/` to match at any depth. Excluded site keys must exist in
-`wordpress_sites`, and at least one site must remain selected. The role never
-creates or changes ownership of a source directory.
+Exclusion patterns use restic syntax. The same list applies to every selected
+site; each pattern is anchored at that site's uploads root, so `cache/**`
+matches only a top-level `cache` directory in each site. `*` never crosses a
+`/`; use `**/` to match at any depth. Per-site exclusions are not supported.
+Excluded site keys must exist in `wordpress_sites`, and at least one site must
+remain selected. The role never creates or changes ownership of a source
+directory.
 
 Until a site's first deploy its uploads path does not exist; restic skips it
 with a warning, exits 3, and Kuma shows down. Deploy the site.
@@ -335,12 +338,14 @@ Complete this checklist against staging before production:
 - [ ] Initialize the repository from the workstation, provision again, and
       confirm success; run a third provision and confirm idempotence.
 - [ ] Manually start and observe the complete first backup in journald.
-- [ ] Verify one snapshot contains every expected uploads root and that new S3
-      objects use `INTELLIGENT_TIERING`.
+- [ ] Verify one snapshot contains every expected uploads root and that all
+      S3 object versions, including lock versions written by provisioning, use
+      `INTELLIGENT_TIERING`.
 - [ ] Run again unchanged and confirm no snapshot is created; change a test
       file and confirm the next run creates a snapshot.
-- [ ] Exercise a site opt-out and a global exclusion; confirm the exclusion
-      does not affect another site's same-named path.
+- [ ] Exercise a site opt-out and a global exclusion; confirm the opted-out
+      site is absent, the excluded path is absent from every selected site, and
+      a similarly named path at a different depth is still present.
 - [ ] Confirm a not-yet-deployed site produces a restic warning, status 3, and
       Kuma down, and that the run succeeds after the site's first deploy.
 - [ ] Confirm timeout termination reports Kuma down.
