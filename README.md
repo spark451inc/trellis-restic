@@ -338,9 +338,9 @@ Complete this checklist against staging before production:
 - [ ] Initialize the repository from the workstation, provision again, and
       confirm success; run a third provision and confirm idempotence.
 - [ ] Manually start and observe the complete first backup in journald.
-- [ ] Verify one snapshot contains every expected uploads root and that all
-      S3 object versions, including lock versions written by provisioning, use
-      `INTELLIGENT_TIERING`.
+- [ ] Verify one snapshot contains every expected uploads root and that the
+      snapshot's data objects and the newest lock version written by
+      provisioning use `INTELLIGENT_TIERING`.
 - [ ] Run again unchanged and confirm no snapshot is created; change a test
       file and confirm the next run creates a snapshot.
 - [ ] Exercise a site opt-out and a global exclusion; confirm the opted-out
