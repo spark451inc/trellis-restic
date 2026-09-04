@@ -161,10 +161,10 @@ with a warning, exits 3, and Kuma shows down. Deploy the site.
 ## Runtime behavior
 
 `restic-backup.timer` starts `restic-backup.service` at 00:00, 06:00, 12:00,
-and 18:00 server local time with up to 30 minutes of random delay,
-`Persistent=true`, and a five-hour `TimeoutStartSec`. Provisioning enables or
-restarts the timer; because of `Persistent=true`, that starts the service
-immediately only if a scheduled run was missed while the timer was stopped.
+and 18:00 server local time with `Persistent=true` and a five-hour
+`TimeoutStartSec`. Provisioning enables or restarts the timer; because of
+`Persistent=true`, that starts the service immediately only if a scheduled run
+was missed while the timer was stopped.
 
 The oneshot service runs as `web_user:web_group` with `Nice=10`, best-effort
 I/O priority 7, `RESTIC_CACHE_DIR=/var/cache/restic-backups`, a private
@@ -190,9 +190,8 @@ sudo journalctl -u restic-backup.service
 sudo systemctl list-timers restic-backup.timer
 ```
 
-Set the Kuma heartbeat interval to six hours plus the 30-minute random delay
-plus the observed maximum normal run time; allow extra time for the initial
-backup.
+Set the Kuma heartbeat interval to six hours plus the observed maximum normal
+run time; allow extra time for the initial backup.
 
 ## AWS contract
 
