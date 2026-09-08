@@ -23,8 +23,8 @@ restic_backup_environment:
 # wordpress_sites keys to skip.
 restic_backup_excluded_sites: []
 
-# restic exclude patterns relative to each site's uploads directory. They are
-# expanded per site so a pattern cannot affect another site's same-named path.
+# restic exclude patterns relative to each site's uploads directory. The same
+# list applies to every selected site, anchored at that site's uploads root.
 restic_backup_excludes: []
 
 # Optional Uptime Kuma push monitor URL.
