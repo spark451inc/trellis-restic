@@ -40,10 +40,14 @@ provision (the acceptance checklist deliberately provisions once before step 3
 to observe the documented failure):
 
 1. Confirm the shared bucket exists and matches the [AWS contract](#aws-contract).
-2. Create the instance profile for `<stack>/<env>` with the host permissions
-   from the AWS contract.
-3. Initialize the repository using the maintenance identity. Provisioning never
-   does this; the repository must already exist:
+2. Give the host an instance profile whose role carries the host permissions
+   from the AWS contract. An instance has exactly one profile; if the host
+   already has one whose role is shared with other environments, create a
+   dedicated role and profile for this host and swap it in rather than adding
+   the policy to the shared role.
+3. Initialize the repository using the maintenance identity and the same
+   restic version as `restic_backup_version`. Provisioning never does this; the
+   repository must already exist:
 
    ```bash
    AWS_DEFAULT_REGION=REGION restic \
@@ -53,7 +57,7 @@ to observe the documented failure):
      init
    ```
 
-4. Attach the instance profile to the EC2 host.
+4. Attach the instance profile to the EC2 host if it is not already attached.
 5. Configure the environment in Trellis (see [Install in Trellis](#install-in-trellis)).
 6. Provision. The role fails the provision if the repository is absent or
    unreachable; fix the cause and re-run.
