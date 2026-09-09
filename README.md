@@ -11,7 +11,7 @@ backup system.
 This is an independent Spark451 integration, not an official Roots or restic
 project.
 
-> Publication status: this GitHub repository is private. The shared
+> Publication status: this GitHub repository is public. The shared
 > `spark451inc` Galaxy namespace request is pending;
 > `spark451inc.trellis_restic` is not published.
 > `v1.0.0` is the only existing release; `v1.0.1` is planned, not published.
@@ -81,8 +81,7 @@ to observe the documented failure):
 
 Add the role to `galaxy.yml`, retaining the local alias `restic_backups`.
 The following pins the existing `v1.0.0` tag.
-While the repository is private, HTTPS access requires an authorized GitHub
-account; once public, it will not require GitHub credentials.
+This HTTPS source is public and does not require GitHub credentials.
 For the upcoming GPL release, see
 [Releases and upgrades](#releases-and-upgrades).
 
