@@ -1,4 +1,4 @@
-# Trellis Restic Backups
+# Trellis Restic
 
 A standalone Ansible role that installs restic and schedules backups of uploads
 for remote [Roots Trellis](https://roots.io/trellis/) WordPress servers. Every
@@ -8,17 +8,30 @@ directory and stores it in an existing Amazon S3 bucket under `<stack>/<env>`.
 Database backups are not included. Configure and verify a separate database
 backup system.
 
+This is an independent Spark451 integration, not an official Roots or restic
+project.
+
+> Publication status: this GitHub repository is private. The shared
+> `spark451inc` Galaxy namespace request is pending;
+> `spark451inc.trellis_restic` is not published.
+> `v1.0.0` is the only existing release; `v1.0.1` is planned, not published.
+
 ## Requirements
 
-- Trellis 1.31 or newer on Ubuntu 24.04 (`x86_64` or `aarch64`); the role
-  relies on Trellis's `env`, `web_user`, `web_group`, `www_root`,
+- Trellis 1.31 or newer; the role relies on Trellis's `env`, `web_user`,
+  `web_group`, `www_root`,
   `wordpress_sites`, `apt_cache_valid_time`, and the `curl` package installed
   by the `common` role
+- A remote Ubuntu server provisioned by Trellis, with APT and systemd;
+  the installer selects official Linux `x86_64` or `aarch64` restic artifacts
 - Ansible 2.10 or newer
 - An existing S3 bucket, an initialized restic repository, and the EC2
   instance-profile permissions described in [AWS contract](#aws-contract); no
   static AWS keys or AWS CLI
 - One repository-writing host per stack/environment pair
+
+Runtime checks used Ubuntu 24.04. Trellis handles platform provisioning;
+this role does not enforce a particular Ubuntu release.
 
 ## Security model
 
@@ -64,16 +77,42 @@ to observe the documented failure):
 
 ## Install in Trellis
 
-Add the role to `galaxy.yml`, pinned to a published tag:
+### GitHub installation
+
+Add the role to `galaxy.yml`, retaining the local alias `restic_backups`.
+The following pins the existing `v1.0.0` tag.
+While the repository is private, HTTPS access requires an authorized GitHub
+account; once public, it will not require GitHub credentials.
+For the upcoming GPL release, see
+[Releases and upgrades](#releases-and-upgrades).
 
 ```yaml
 roles:
   # Existing Trellis roles...
   - name: restic_backups
-    src: git@github.com:spark451inc/trellis-restic-backups.git
+    src: https://github.com/spark451inc/trellis-restic.git
     scm: git
     version: v1.0.0
 ```
+
+### Planned Galaxy installation
+
+The following is for use **only after** namespace approval, role import, and
+publication of `v1.0.1`. Neither the Galaxy listing nor that release exists
+yet:
+
+```yaml
+roles:
+  # Existing Trellis roles...
+  - name: restic_backups
+    src: spark451inc.trellis_restic
+    version: v1.0.1
+```
+
+Use one source entry, not both. The explicit `name` keeps the same local
+Trellis alias whether the role comes from GitHub or Galaxy.
+
+### Trellis configuration
 
 Add it to `server.yml` immediately after `wordpress-setup`; do not add it to
 `dev.yml`. Preserve the entry when merging future Trellis upgrades:
@@ -357,7 +396,37 @@ Complete this checklist against staging before production:
 - [ ] Dry-run the documented retention policy using the maintenance identity.
 - [ ] Complete and verify a staged single-site restore to a temporary target.
 
-## Releases
+## Releases and upgrades
 
-Publish immutable semantic tags such as `v1.0.0` only after the acceptance
-checklist has passed on staging, and pin Trellis `galaxy.yml` to that tag.
+`v1.0.1` is the planned GPL-2.0-or-later release; it is not yet available.
+It changes documentation, licensing, and role metadata, not runtime behavior.
+
+When published, update the source and version in Trellis
+`galaxy.yml`, keeping `name: restic_backups` and the existing `server.yml`
+entry. Variables and service names stay unchanged. No restic repository
+migration or reinitialization is required.
+
+Release tags are immutable. Publish a release only after staging acceptance,
+and pin Trellis `galaxy.yml` to its tag.
+
+## License
+
+Copyright (C) 2026 JenSpark, Inc. d/b/a Spark451.
+
+Trellis Restic is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 2 of the License, or (at your option)
+any later version (**GPL-2.0-or-later**).
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See [LICENSE](LICENSE) for the full terms.
+
+This grant covers this role's code and documentation, not its separately
+installed dependencies. The role downloads the official restic binary during
+provisioning; it does not bundle restic source code or binaries.
+[Restic](https://github.com/restic/restic/blob/v0.19.1/LICENSE) is BSD-2-Clause,
+[Trellis](https://github.com/roots/trellis/blob/v1.31.0/LICENSE.md) is MIT, and
+[Ansible](https://github.com/ansible/ansible/blob/stable-2.10/COPYING) is GPLv3.
+Those projects and the system tools invoked by this role retain their own
+licenses and notices.

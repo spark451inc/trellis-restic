@@ -1,17 +1,14 @@
 ---
 galaxy_info:
-  role_name: restic_backups
+  namespace: spark451inc
+  role_name: trellis_restic
   author: spark451inc
   description: >-
     Install and schedule passwordless restic backups of uploads for
     Trellis-managed WordPress servers
-  company: Spark451
-  license: proprietary
+  company: JenSpark, Inc. d/b/a Spark451
+  license: GPL-2.0-or-later
   min_ansible_version: "2.10"
-  platforms:
-    - name: Ubuntu
-      versions:
-        - noble
   galaxy_tags:
     - backup
     - restic
