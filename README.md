@@ -12,9 +12,8 @@ This is an independent Spark451 integration, not an official Roots or restic
 project.
 
 > Publication status: this GitHub repository is public. The shared
-> `spark451inc` Galaxy namespace request is pending;
-> `spark451inc.trellis_restic` is not published.
-> `v1.0.0` is the only existing release; `v1.0.1` is planned, not published.
+> `spark451inc` Galaxy namespace is available; the
+> `spark451inc.trellis_restic` role import is pending.
 
 ## Requirements
 
@@ -80,10 +79,8 @@ to observe the documented failure):
 ### GitHub installation
 
 Add the role to `galaxy.yml`, retaining the local alias `restic_backups`.
-The following pins the existing `v1.0.0` tag.
+The following pins `v1.0.1`.
 This HTTPS source is public and does not require GitHub credentials.
-For the upcoming GPL release, see
-[Releases and upgrades](#releases-and-upgrades).
 
 ```yaml
 roles:
@@ -91,14 +88,13 @@ roles:
   - name: restic_backups
     src: https://github.com/spark451inc/trellis-restic.git
     scm: git
-    version: v1.0.0
+    version: v1.0.1
 ```
 
 ### Planned Galaxy installation
 
-The following is for use **only after** namespace approval, role import, and
-publication of `v1.0.1`. Neither the Galaxy listing nor that release exists
-yet:
+Use this source **only after** `spark451inc.trellis_restic` has been imported
+into Galaxy:
 
 ```yaml
 roles:
@@ -397,10 +393,10 @@ Complete this checklist against staging before production:
 
 ## Releases and upgrades
 
-`v1.0.1` is the planned GPL-2.0-or-later release; it is not yet available.
-It changes documentation, licensing, and role metadata, not runtime behavior.
+`v1.0.1` adds GPL-2.0-or-later licensing and Galaxy-ready metadata.
+It changes documentation and metadata, not runtime behavior.
 
-When published, update the source and version in Trellis
+Update the source and version in Trellis
 `galaxy.yml`, keeping `name: restic_backups` and the existing `server.yml`
 entry. Variables and service names stay unchanged. No restic repository
 migration or reinitialization is required.
