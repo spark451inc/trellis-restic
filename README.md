@@ -11,9 +11,8 @@ backup system.
 This is an independent Spark451 integration, not an official Roots or restic
 project.
 
-> Publication status: this GitHub repository is public. The shared
-> `spark451inc` Galaxy namespace is available; the
-> `spark451inc.trellis_restic` role import is pending.
+Available on GitHub and Ansible Galaxy as
+[`spark451inc.trellis_restic`](https://galaxy.ansible.com/ui/standalone/roles/spark451inc/trellis_restic/).
 
 ## Requirements
 
@@ -91,10 +90,9 @@ roles:
     version: v1.0.1
 ```
 
-### Planned Galaxy installation
+### Galaxy installation
 
-Use this source **only after** `spark451inc.trellis_restic` has been imported
-into Galaxy:
+Alternatively, install from Galaxy with the same local alias:
 
 ```yaml
 roles:
